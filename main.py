@@ -72,7 +72,7 @@ async def create_checkout_session(request: Request):
 
     # escolhe a URL de sucesso de acordo com o produto
     if price_id == 'price_1RzO0jEHsMKn9uopi6Ee3fSD':
-        success_url = add_sid('https://learnmoredigitalcourse.com/pink-up1-stripe')
+        success_url = add_sid('https://drive.google.com/drive/folders/1Pa-ouVsb2eOpEKTgS7lKToc8v-4BBIDV?usp=sharing')
     else:
         success_url = add_sid('https://learnmoredigitalcourse.com/audizen_stripe_9')
 
