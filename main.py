@@ -299,30 +299,92 @@ async def stripe_webhook(request: Request):
             }]
         }
 
-        # 3.3) Tenta criar a invoice e seus items
+        # 3.3) Gera a Invoice espelho (sem "Payment for Invoice (canceled)")
+        def clean_desc(raw: str) -> str:
+            return re.sub(r"\s*\(Session\s+cs_[a-zA-Z0-9_]+\)\s*$", "", (raw or "")).strip()
+        
         try:
-            print(f"🔔 [webhook] criando invoice para sessão {session.id}")
-
-            # 1) InvoiceItem para cada linha
-            for item in session.line_items.data:
+            print(f"🔔 [webhook] criando invoice (safe) para sessão {session.id}")
+            idem_prefix = f"cs:{session.id}"
+        
+            # 1) Buscar line items via API (sempre) + inferir moeda do Checkout
+            line_items = stripe.checkout.Session.list_line_items(
+                session.id,
+                expand=["data.price.product", "data.price"]
+            )
+            # moeda preferencial do Checkout
+            checkout_currency = (getattr(session, "currency", None) or "usd").lower()
+        
+            # se o line item expõe currency, priorize ele (garante fidelidade)
+            first_li = None
+            for li in line_items.auto_paging_iter():
+                first_li = li
+                break
+            if first_li is None:
+                raise RuntimeError("Checkout sem line items; nada para faturar.")
+        
+            li_currency = (first_li.get("currency")
+                           or ((first_li.get("price") or {}).get("currency"))
+                           or checkout_currency).lower()
+            currency = li_currency
+        
+            # (Opcional, mas recomendado) Limpeza de itens PENDENTES antigos do mesmo customer
+            # para evitar que a Stripe "inclua" pendências de outra compra na nova invoice.
+            # Mantemos apenas os que têm parent_session_id == sessão atual.
+            pending_items = stripe.InvoiceItem.list(customer=cust, limit=100)
+            for ii in pending_items.auto_paging_iter():
+                if ii.get("invoice") is None and ii.get("metadata", {}).get("parent_session_id") != session.id:
+                    try:
+                        stripe.InvoiceItem.delete(ii.id)
+                        print(f"   → Pending InvoiceItem antigo removido: {ii.id}")
+                    except Exception as _:
+                        pass  # não falhar por limpeza
+        
+            # 2) Criar InvoiceItems PENDENTES (um por line item), na moeda do Checkout
+            #    Usamos amount_total (total exato do item já com qty/discount/imposto).
+            created_any = False
+            for li in stripe.ListObject.auto_paging_iter(line_items):
+                total = li.get("amount_total")
+                if total is None:
+                    # Fallback defensivo
+                    total = li.get("amount_subtotal")
+                    if total is None:
+                        price = (li.get("price") or {})
+                        unit = int(price.get("unit_amount") or 0)
+                        qty = int(li.get("quantity") or 1)
+                        total = unit * qty
+        
+                price = li.get("price") or {}
+                product = price.get("product") or {}
+                name = product.get("name") or price.get("nickname") or li.get("description") or "Item"
+        
+                # idempotência por line_item.id
                 ii = stripe.InvoiceItem.create(
                     customer=cust,
-                    amount=item.amount_subtotal,
-                    currency=session.currency,
-                    description=item.description,              
-                    metadata={"checkout_session": session.id}
+                    currency=currency,
+                    amount=int(total),   # total em centavos
+                    description=clean_desc(name),
+                    metadata={
+                        "source": "mirror_checkout_session",
+                        "parent_session_id": session.id,
+                        "line_item_id": li.get("id", "")
+                    },
+                    idempotency_key=f"{idem_prefix}:ii:{li.get('id')}",
                 )
-                print(
-                    f"   → InvoiceItem criado: {ii.id}, "
-                    f"valor: {ii.amount/100:.2f} {ii.currency.upper()}"
-                )
-            
-            # 2) Cria a Invoice em draft (não auto-advance)
+                created_any = True
+                print(f"   → InvoiceItem pendente criado: {ii.id} | total: {int(total)/100:.2f} {currency.upper()}")
+        
+            if not created_any:
+                raise RuntimeError("Nenhum InvoiceItem criado; verifique os line items.")
+        
+            # 3) Criar a Invoice com include dos pendentes (herda a MOEDA dos itens)
             invoice = stripe.Invoice.create(
                 customer=cust,
+                collection_method="send_invoice",               # evita criar PaymentIntent interno
+                days_until_due=30,                              # obrigatório com send_invoice
+                pending_invoice_items_behavior="include",       # inclui os pendentes criados acima
                 auto_advance=False,
-                collection_method="charge_automatically",   # ← trocado (era "send_invoice")
-                pending_invoice_items_behavior="include",
+                description="Compra via Checkout",
                 footer=(
                     "Thank you for purchasing the formula. To access the material, "
                     "simply click on the link and follow the instructions: "
@@ -330,28 +392,54 @@ async def stripe_webhook(request: Request):
                     "If you have any questions, please send an email to: "
                     "digital.solutions.ooh@gmail.com"
                 ),
-                metadata=dict(session.metadata or {})
+                metadata={**(dict(session.metadata or {})), "parent_session_id": session.id},
+                idempotency_key=f"{idem_prefix}:invoice:create",
             )
-            print(
-                f"   → Invoice draft criada: {invoice.id}, "
-                f"subtotal: {invoice.subtotal/100:.2f} {invoice.currency.upper()}"
-            )
-            
-            # 3) Finaliza a Invoice para agregar todos os InvoiceItems (sem auto-cobrança)
-            finalized = stripe.Invoice.finalize_invoice(invoice.id, auto_advance=False)
-            print(
-                f"   → Invoice finalizada: {finalized.id}, "
-                f"valor devido: {finalized.amount_due/100:.2f} {finalized.currency.upper()}"
-            )
-            
-            # 3.1) Marca como paga sem nova cobrança
-            paid = stripe.Invoice.pay(finalized.id, paid_out_of_band=True)
-            print(
-                f"   → Invoice marcada como PAGA: {paid.id} | "
-                f"amount_paid: {paid.amount_paid/100:.2f} {paid.currency.upper()}"
-            )
-            print(f"   → Links: hosted={paid.hosted_invoice_url} | pdf={paid.invoice_pdf}")
+            print(f"   → Invoice draft criada: {invoice.id} | currency={invoice.currency.upper()}")
 
+            stripe.Invoice.modify(invoice.id, collection_method="send_invoice", days_until_due=30)
+        
+            # 4) Finalizar e marcar como paga (sem e-mail e sem PI)
+            finalized = stripe.Invoice.finalize_invoice(
+                invoice.id,
+                auto_advance=False,
+                idempotency_key=f"{idem_prefix}:invoice:finalize",
+            )
+            print(
+                f"   → Invoice finalizada: {finalized.id} | "
+                f"amount_due: {finalized.amount_due/100:.2f} {finalized.currency.upper()}"
+            )
+
+            if finalized.collection_method != "send_invoice":
+                stripe.Invoice.modify(finalized.id, collection_method="send_invoice", due_date=finalized.due_date or int(time.time()) + 30*24*60*60)
+            
+            state = stripe.Invoice.retrieve(finalized.id, expand=["payment_intent"])
+            pi_obj = getattr(state, "payment_intent", None)  # pode não existir
+            print(f"   → collection_method={state.collection_method} | has_pi={bool(pi_obj)}")
+            if pi_obj:
+                print(f"   → PI inesperado atrelado: {getattr(pi_obj, 'id', pi_obj)}")
+        
+            if finalized.status != "paid":
+                paid = stripe.Invoice.pay(
+                    finalized.id,
+                    paid_out_of_band=True,
+                    idempotency_key=f"{idem_prefix}:invoice:pay",
+                )
+                print(
+                    f"   → Invoice marcada como PAGA: {paid.id} | "
+                    f"amount_paid: {paid.amount_paid/100:.2f} {paid.currency.upper()}"
+                )
+                print(f"   → Links: hosted={paid.hosted_invoice_url} | pdf={paid.invoice_pdf}")
+            else:
+                print("   → Invoice já estava 'paid' (provavelmente amount_due=0).")
+        
+        except stripe.error.InvalidRequestError as e:
+            if "Invoice is already paid" in str(e):
+                print("ℹ Invoice já estava paga, ignorando pay().")
+            else:
+                import traceback
+                print("‼️ Erro criando invoice:", e)
+                print(traceback.format_exc())
         except Exception as e:
             import traceback
             print("‼️ Erro criando invoice:", e)
