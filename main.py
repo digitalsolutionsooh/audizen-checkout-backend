@@ -75,7 +75,7 @@ async def create_checkout_session(request: Request):
     if price_id in (
         'price_1RzO0jEHsMKn9uopi6Ee3fSD',
         'price_1S09qdEHsMKn9uopqNgryDVt'
-    )
+    ):
         success_url = add_sid('https://drive.google.com/drive/folders/1Pa-ouVsb2eOpEKTgS7lKToc8v-4BBIDV?usp=sharing')
     else:
         success_url = add_sid('https://learnmoredigitalcourse.com/audizen_stripe_9')
