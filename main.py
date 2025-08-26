@@ -74,9 +74,10 @@ async def create_checkout_session(request: Request):
     # escolhe a URL de sucesso de acordo com o produto
     if price_id in (
         'price_1RzO0jEHsMKn9uopi6Ee3fSD',
+        'price_1S0Uq8EHsMKn9uopNoI5pLue',
         'price_1S09qdEHsMKn9uopqNgryDVt'
     ):
-        success_url = add_sid('https://drive.google.com/drive/folders/1Pa-ouVsb2eOpEKTgS7lKToc8v-4BBIDV?usp=sharing')
+        success_url = add_sid('https://learnmoredigitalcourse.com/serenity-audizen-up1stripe')
     else:
         success_url = add_sid('https://learnmoredigitalcourse.com/audizen_stripe_9')
 
