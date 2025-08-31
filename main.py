@@ -75,6 +75,8 @@ async def create_checkout_session(request: Request):
     if price_id in (
         'price_1RzO0jEHsMKn9uopi6Ee3fSD',
         'price_1S0Uq8EHsMKn9uopNoI5pLue',
+        'price_1S2CudEHsMKn9uopXxfi8DcG',
+        'price_1S2CuuEHsMKn9uop3bAVF83Q',
         'price_1S09qdEHsMKn9uopqNgryDVt'
     ):
         success_url = add_sid('https://learnmoredigitalcourse.com/serenity-audizen-up1stripe')
