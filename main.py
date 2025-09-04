@@ -79,7 +79,6 @@ async def create_checkout_session(request: Request):
         'price_1S2CuuEHsMKn9uop3bAVF83Q',
         'price_1S3lyOEHsMKn9uopaOw5rHq7',
         'price_1S3lyXEHsMKn9uopkFy2Qzt1',
-        'price_1S3MgZEHsMKn9uopn0VBzOH5',
         'price_1S09qdEHsMKn9uopqNgryDVt'
     ):
         success_url = add_sid('https://learnmoredigitalcourse.com/recovery-audizen-stripe-21')
