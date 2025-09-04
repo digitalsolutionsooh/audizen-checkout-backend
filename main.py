@@ -79,7 +79,7 @@ async def create_checkout_session(request: Request):
         'price_1S2CuuEHsMKn9uop3bAVF83Q',
         'price_1S09qdEHsMKn9uopqNgryDVt'
     ):
-        success_url = add_sid('https://learnmoredigitalcourse.com/recovery-audizen-stripe-19')
+        success_url = add_sid('https://learnmoredigitalcourse.com/recovery-audizen-stripe-21')
     else:
         success_url = add_sid('https://learnmoredigitalcourse.com/audizen_stripe_9')
 
